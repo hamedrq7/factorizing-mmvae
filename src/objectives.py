@@ -1,4 +1,3 @@
-# objectives of choice
 import torch
 from numpy import prod
 from typing import Dict
@@ -14,7 +13,6 @@ def compute_microbatch_split(x, K):
     S = int(1e8 * S)  # float heuristic for 12Gb cuda memory
     assert (S > 0), "Cannot fit individual data in memory, consider smaller K"
     return min(B, S)
-
 
 def elbo(model, x, loss_log: Dict, phase: str, K=1):
     # x: [bs, imgChnl, H, W]
@@ -136,8 +134,6 @@ def m_elbo_naive(model, x, agg, phase: str, K=1):
     return obj.mean(0).sum() # mean across K, the sum across batch_size
 
 
-
-
 def m_elbo(model, x, agg, phase, K=1):
     """Computes importance-sampled m_elbo (in notes3) for multi-modal vae """
 
@@ -158,16 +154,6 @@ def m_elbo(model, x, agg, phase, K=1):
                 
                 lwt = (qz_x.log_prob(zs) - qz_xs[d].log_prob(zs).detach()).sum(-1)
             
-                # debug and understand: 
-                # print()
-                # print(r, d)
-                # print(qz_xs[d].log_prob(zs).shape) # [K, bs, latent_dim]
-                # print(qz_x.log_prob(zs).shape)
-
-                # print(qz_xs[d].log_prob(zs)[0][0]) 
-                # print(qz_x.log_prob(zs)[0][0])
-                
-                ###
             if r==0 and d==1:
                 agg[f'{phase}_lp1_x1_z_0'].append(lpx_z.mean().item())
             elif r==1 and d==0:
@@ -264,7 +250,7 @@ def m_elbo_all(model, x, loss_log, phase, K=1):
     total_loss = mmvae_loss + uni_mnist_loss + uni_svhn_loss
     return total_loss
 
-def m_infoNCE(model, x, loss_log, phase, K=1):
+def m_infoNCE_naive(model, x, loss_log, phase, K=1):
     # ELBO uni-mnist
     qz_x_mnist, px_z_mnist, zs_mnist = model.vaes[0](x[0])  
     lpx_z = px_z_mnist.log_prob(x[0]).view(*px_z_mnist.batch_shape[:2], -1) * model.vaes[0].llik_scaling 
@@ -353,8 +339,8 @@ def m_infoNCE(model, x, loss_log, phase, K=1):
     ## SVHN
     # qz_x_svhn, zs_svhn
     # qz_xs_mmvae[1], zss_mmvae[1]
-    inf_svhn_1 = qz_xs_mmvae[1].log_prob(zss_mmvae[1]).exp()
-    inf_svhn_2 = qz_x_svhn.log_prob(zs_svhn).exp() 
+    inf_svhn_1 = qz_xs_mmvae[1].log_prob(zss_mmvae[1]).exp() # == 1
+    inf_svhn_2 = qz_x_svhn.log_prob(zs_svhn).exp() # == 1 
     
     inf_svhn_3 = qz_x_svhn.log_prob(zss_mmvae[1]).exp() # ==0
     inf_svhn_4 = qz_xs_mmvae[1].log_prob(zs_svhn).exp() # ==0
@@ -382,11 +368,11 @@ def m_infoNCE(model, x, loss_log, phase, K=1):
     loss_log[f'{phase}_loss_inf_svhn'].append(loss_inf_svhn.item())
     
     alpha = 1.0
-    total_loss = 0.001*(mmvae_loss + uni_mnist_loss + uni_svhn_loss) - alpha*(loss_inf_mnist+loss_inf_svhn)
+    total_loss = (mmvae_loss + uni_mnist_loss + uni_svhn_loss) - alpha*(loss_inf_mnist+loss_inf_svhn)
     return total_loss
 
 
-def m_infoNCE_pro(model, x, loss_log, phase, K=1):
+def m_infoNCE_v2(model, x, loss_log, phase, K=1):
     # ELBO uni-mnist
     qz_x_mnist, px_z_mnist, zs_mnist = model.vaes[0](x[0])  
     lpx_z = px_z_mnist.log_prob(x[0]).view(*px_z_mnist.batch_shape[:2], -1) * model.vaes[0].llik_scaling 
@@ -413,11 +399,18 @@ def m_infoNCE_pro(model, x, loss_log, phase, K=1):
     for r, qz_x in enumerate(qz_xs_mmvae):
         kld = kl_divergence(qz_x, model.mmvae.pz(*model.mmvae.pz_params))
         klds.append(kld.sum(-1))
-        for d, px_z in enumerate(px_zs_mmvae[r]):
-            lpx_z = px_z.log_prob(x[d]) * model.mmvae.vaes[d].llik_scaling
-            
-            lpx_zs.append(lpx_z.view(*px_z.batch_shape[:2], -1).sum(-1))
-    
+        for d in range(len(px_zs_mmvae)):
+            lpx_z = px_zs_mmvae[d][d].log_prob(x[d]).view(*px_zs_mmvae[d][d].batch_shape[:2], -1)
+            lpx_z = (lpx_z * model.mmvae.vaes[d].llik_scaling).sum(-1)
+            if d == r:
+                lwt = torch.tensor(0.0)
+            else:
+                zs = zss_mmvae[d].detach()
+                
+                lwt = (qz_x.log_prob(zs) - qz_xs_mmvae[d].log_prob(zs).detach()).sum(-1)
+
+            lpx_zs.append(lwt.exp() * lpx_z)
+
     loss_log[f'mmvae_{phase}_lp0_x0_z_0'].append(lpx_zs[0].mean().item())
     loss_log[f'mmvae_{phase}_lp1_x1_z_0'].append(lpx_zs[1].mean().item())
     loss_log[f'mmvae_{phase}_lp0_x0_z_1'].append(lpx_zs[2].mean().item())
@@ -429,13 +422,13 @@ def m_infoNCE_pro(model, x, loss_log, phase, K=1):
     mmvae_loss = mmvae_loss.mean(0).sum()
 
     # infoNCE: 
+    loss_fn = torch.nn.CrossEntropyLoss() # reduction='none'
 
     ## MNIST
     # qz_x_mnist, zs_mnist 
     # qz_xs_mmvae[0], zss_mmvae[0]
     inf_mnist_1 = qz_xs_mmvae[0].log_prob(zss_mmvae[0]).exp() # ==1, # [K=1, bs, latent_dim] 
     inf_mnist_2 = qz_x_mnist.log_prob(zs_mnist).exp() # ==1, # [K=1, bs, latent_dim] 
-    
     inf_mnist_3 = qz_x_mnist.log_prob(zss_mmvae[0]).exp() # ==0
     inf_mnist_4 = qz_xs_mmvae[0].log_prob(zs_mnist).exp() # ==0
     
@@ -449,7 +442,7 @@ def m_infoNCE_pro(model, x, loss_log, phase, K=1):
     inf_mnist_3 = inf_mnist_3.mean(0)[:, None, :]
     inf_mnist_4 = inf_mnist_4.mean(0)[:, None, :]
     
-    
+    #### v1
     inf_mnist = torch.cat([inf_mnist_1, inf_mnist_2, inf_mnist_3, inf_mnist_4], dim=1) # [bs, 4, latent_dim]
     
     target_mnist = torch.cat([
@@ -460,11 +453,23 @@ def m_infoNCE_pro(model, x, loss_log, phase, K=1):
     loss_fn = torch.nn.CrossEntropyLoss() # reduction='none'
     loss_inf_mnist = loss_fn(inf_mnist, target_mnist) # with reduction='none', size of the loss is [bs, latent_dim]
 
+    #### v2
+    # inf_mnist =  torch.cat([inf_mnist_1, inf_mnist_2, inf_mnist_3, inf_mnist_4], dim=1).mean(2) # MEAN ACROSS LATENT [bs, 4]
+    # target_mnist = torch.cat([
+    #     torch.ones((inf_mnist.shape[0], 2), device=inf_mnist.device),
+    #     torch.zeros((inf_mnist.shape[0], 2), device=inf_mnist.device),
+    # ], dim=1)
+
+    # loss_inf_mnist = loss_fn(inf_mnist, target_mnist) # with reduction='none', size of the loss is [bs]
+
+    #### v3
+    # loss_inf_mnist = ((inf_mnist_1+inf_mnist_2)- (inf_mnist_3+ inf_mnist_4)).mean()
+
     ## SVHN
     # qz_x_svhn, zs_svhn
     # qz_xs_mmvae[1], zss_mmvae[1]
-    inf_svhn_1 = qz_xs_mmvae[1].log_prob(zss_mmvae[1]).exp()
-    inf_svhn_2 = qz_x_svhn.log_prob(zs_svhn).exp() 
+    inf_svhn_1 = qz_xs_mmvae[1].log_prob(zss_mmvae[1]).exp() # == 1
+    inf_svhn_2 = qz_x_svhn.log_prob(zs_svhn).exp() # == 1 
     
     inf_svhn_3 = qz_x_svhn.log_prob(zss_mmvae[1]).exp() # ==0
     inf_svhn_4 = qz_xs_mmvae[1].log_prob(zs_svhn).exp() # ==0
@@ -482,8 +487,8 @@ def m_infoNCE_pro(model, x, loss_log, phase, K=1):
     inf_svhn = torch.cat([inf_svhn_1, inf_svhn_2, inf_svhn_3, inf_svhn_4], dim=1) # [bs, 4, latent_dim]
     
     target_svhn = torch.cat([
-        torch.ones((inf_svhn.shape[0], 2, inf_svhn.shape[-1]), device=inf_mnist.device),
-        torch.zeros((inf_svhn.shape[0], 2, inf_svhn.shape[-1]), device=inf_mnist.device),
+        torch.ones((inf_svhn.shape[0], 2, inf_svhn.shape[-1]), device=inf_svhn.device),
+        torch.zeros((inf_svhn.shape[0], 2, inf_svhn.shape[-1]), device=inf_svhn.device),
     ], dim=1)
 
     loss_inf_svhn = loss_fn(inf_svhn, target_svhn) # with reduction='none', size of the loss is [bs, latent_dim]
@@ -491,8 +496,12 @@ def m_infoNCE_pro(model, x, loss_log, phase, K=1):
     loss_log[f'{phase}_loss_inf_mnist'].append(loss_inf_mnist.item())
     loss_log[f'{phase}_loss_inf_svhn'].append(loss_inf_svhn.item())
     
-    total_loss = mmvae_loss + uni_mnist_loss + uni_svhn_loss # - loss_inf_mnist - loss_inf_svhn
+    alpha = 1.0
+    total_loss = (mmvae_loss + uni_mnist_loss + uni_svhn_loss) - alpha*(loss_inf_mnist+loss_inf_svhn)
     return total_loss
+
+
+
 
 def _m_iwae(model, x, K=1):
     """IWAE estimate for log p_\theta(x) for multi-modal vae -- fully vectorised"""
@@ -510,7 +519,7 @@ def _m_iwae(model, x, K=1):
     return torch.cat(lws)  # (n_modality * n_samples) x batch_size, batch_size
 
 
-def m_iwae(model, x, K=1):
+def m_iwae(model, x, loss_log, phase, K=1):
     """Computes iwae estimate for log p_\theta(x) for multi-modal vae """
     S = compute_microbatch_split(x, K)
     x_split = zip(*[_x.split(S) for _x in x])
@@ -565,7 +574,7 @@ def _m_dreg(model, x, K=1):
     return torch.cat(lws), torch.cat(zss)
 
 
-def m_dreg(model, x, K=1):
+def m_dreg(model, x, loss_log, phase, K=1):
     """Computes dreg estimate for log p_\theta(x) for multi-modal vae """
     S = compute_microbatch_split(x, K)
     x_split = zip(*[_x.split(S) for _x in x])
@@ -598,7 +607,7 @@ def _m_dreg_looser(model, x, K=1):
     return torch.stack(lws), torch.stack(zss)
 
 
-def m_dreg_looser(model, x, K=1):
+def m_dreg_looser(model, x, loss_log, phase, K=1):
     """Computes dreg estimate for log p_\theta(x) for multi-modal vae
     This version is the looser bound---with the average over modalities outside the log
     """

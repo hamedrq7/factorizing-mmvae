@@ -29,7 +29,7 @@ parser.add_argument('--model', type=str, default='mnist_svhn', metavar='M',
 #                     help='number of hidden layers in enc and dec (default: 1)')
 
 parser.add_argument('--obj', type=str, default='elbo', metavar='O',
-                    choices=['elbo', 'iwae', 'dreg', 'elbo_naive', 'modified_elbo_naive', 'elbo_all', 'infoNCE'],
+                    choices=['elbo', 'iwae', 'dreg', 'elbo_naive', 'elbo_all', 'infoNCE_naive', 'infoNCE_v2'],
                     help='objective to use (default: elbo)')
 parser.add_argument('--K', type=int, default=20, metavar='K',
                     help='number of particles to use for iwae/dreg (default: 10)')
@@ -85,7 +85,6 @@ parser.add_argument('--dm', type=int, default=30, metavar='N',
 args = parser.parse_args()
 # keep it?
 args.softmax = True if args.distr == 'Laplace' else False
-# ? 
 # args.obj = 'elbo_all' if args.model == 'fummvae' else args.abj
 
 # random seed
@@ -137,6 +136,9 @@ sys.stdout = Logger('{}/run.log'.format(runPath))
 print('Expt:', runPath)
 print('RunID:', runId)
 print('args: ', args)
+command_line_args = sys.argv
+command = ' '.join(command_line_args)
+print(f"The command that ran this script: {command}")
 
 # save args to run
 with open('{}/args.json'.format(runPath), 'w') as fp:
@@ -154,7 +156,6 @@ if hasattr(model, 'vaes'):
 else:    
     train_loader, test_loader = model.getDataLoaders(args.batch_size, device=device)
 
-
 objective = getattr(objectives,
                     ('m_' if hasattr(model, 'vaes') else '')
                     + args.obj
@@ -166,7 +167,6 @@ t_objective = getattr(objectives,
                     ('m_' if hasattr(model, 'vaes') else '')
                     + args.obj
                     + ('_looser' if (args.looser and args.obj != 'elbo') else ''))
-
 
 def train_factorized(epoch, agg):
     model.train()
@@ -191,9 +191,6 @@ def train_factorized(epoch, agg):
 
         optimizer.step()
         
-        if args.print_freq > 0 and i % args.print_freq == 0:
-            print("iteration {:04d}: mmvae loss: {:6.3f}, mnist loss: {:6.3f}, svhn loss: {:6.3f}".format(i, loss_mmvae.item() / args.batch_size, loss_mnist / args.batch_size, loss_svhn/args.batch_size))
-
         if i == 0: 
             model.reconstruct(data, runPath, epoch, is_train=True)
         
@@ -309,7 +306,7 @@ if __name__ == '__main__':
         for epoch in trange(1, args.epochs + 1):
             if hasattr(model, 'vaes') and hasattr(model, 'mmvae'): # fummvae         
                 train_factorized(epoch, agg)
-                # test_factorized(epoch, agg) # oct
+                test_factorized(epoch, agg) # oct
             else:
                 train(epoch, agg)
                 test(epoch, agg)
@@ -319,14 +316,14 @@ if __name__ == '__main__':
             # model.generate(runPath, epoch)
             model.generate(runPath, epoch, only_mean=True)
             
-            if isinstance(model, models.VAE_mnist) or isinstance(model, models.vae_svhn): 
+            if isinstance(model, models.VAE_mnist) or isinstance(model, models.VAE_svhn): 
                 custom_plot_loss(loss_dict=agg, keys_to_plot=['train_lpx_z', 'train_kl'], title='train UNI VAE', name_to_save='train unimodal losses', runPath=runPath)
                 custom_plot_loss(loss_dict=agg, keys_to_plot=['test_lpx_z', 'test_kl'], title='test UNI VAE', name_to_save='test unimodal losses', runPath=runPath)
                 
             # mmvae
-            custom_plot_loss(loss_dict=agg, keys_to_plot=['mmvae_train_lp0_x0_z_0', 'mmvae_train_lp1_x1_z_1'], title='normal reconstruction loss', name_to_save='train mmvae normal gen loss', runPath=runPath)
-            custom_plot_loss(loss_dict=agg, keys_to_plot=['mmvae_train_lp1_x1_z_0', 'mmvae_train_lp0_x0_z_1'], title='cross reconstruction loss', name_to_save='train mmvae cross gen loss', runPath=runPath)
-            custom_plot_loss(loss_dict=agg, keys_to_plot=['mmvae_train_kl_q0_pz', 'mmvae_train_kl_q1_pz'], title='kl losses', name_to_save='train mmvae_kl losses', runPath=runPath)
+            custom_plot_loss(loss_dict=agg, keys_to_plot=['train_lp0_x0_z_0', 'train_lp1_x1_z_1'], title='normal reconstruction loss', name_to_save='train mmvae normal gen loss', runPath=runPath)
+            custom_plot_loss(loss_dict=agg, keys_to_plot=['train_lp1_x1_z_0', 'train_lp0_x0_z_1'], title='cross reconstruction loss', name_to_save='train mmvae cross gen loss', runPath=runPath)
+            custom_plot_loss(loss_dict=agg, keys_to_plot=['train_kl_q0_pz', 'train_kl_q1_pz'], title='kl losses', name_to_save='train mmvae_kl losses', runPath=runPath)
 
             # uni vae
             custom_plot_loss(loss_dict=agg, keys_to_plot=['mnist_train_lpx_z', 'mnist_train_kl'], title='MNIST UNI VAE', name_to_save='train unimodal mnist losses', runPath=runPath)

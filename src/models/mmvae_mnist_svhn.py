@@ -18,7 +18,11 @@ from .vae_svhn import SVHN
 
 class MNIST_SVHN(MMVAE):
     def __init__(self, params):
-        super(MNIST_SVHN, self).__init__(dist.Normal, params, MNIST, SVHN)
+        if params.distr == 'Normal': 
+            super(MNIST_SVHN, self).__init__(dist.Normal, params, MNIST, SVHN)
+        elif params.distr == 'Laplace': 
+            super(MNIST_SVHN, self).__init__(dist.Laplace, params, MNIST, SVHN)
+            
         grad = {'requires_grad': params.learn_prior}
         self._pz_params = nn.ParameterList([
             nn.Parameter(torch.zeros(1, params.latent_dim), requires_grad=False),  # mu
@@ -29,8 +33,6 @@ class MNIST_SVHN(MMVAE):
 
         print('Mnist llik_scaling: ', self.vaes[0].llik_scaling)
         print('SVHN llik_scaling: ', self.vaes[1].llik_scaling)
-        # print(self.vaes[0])
-        # exit()
 
         self.modelName = 'mnist-svhn'
 
@@ -43,7 +45,6 @@ class MNIST_SVHN(MMVAE):
                 and os.path.exists(f'../data/train-ms-svhn-idx_max_d_{max_d}_dm_{dm}.pt')
                 and os.path.exists(f'../data/test-ms-mnist-idx_max_d_{max_d}_dm_{dm}.pt')
                 and os.path.exists(f'../data/test-ms-svhn-idx_max_d_{max_d}_dm_{dm}.pt')):
-
 
             # raise RuntimeError('Generate transformed indices with the script in bin')
             custom_make_mnist_svhn_idx(max_d, dm)

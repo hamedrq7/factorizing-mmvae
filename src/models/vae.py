@@ -14,6 +14,8 @@ class VAE(nn.Module):
         self.pz = getattr(distributions, params.distr) # prior
         self.px_z = getattr(distributions, params.distr) # likelihood
         self.qz_x = getattr(distributions, params.distr) # posterior
+        print(params.distr)
+
         self.enc = enc
         self.dec = dec
         self.modelName = None

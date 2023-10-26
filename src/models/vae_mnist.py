@@ -100,6 +100,7 @@ class Enc(nn.Module):
         # c1, c2 size: latent_dim x 1 x 1
 
         self.do_softmax = do_softmax
+        print('vae_mnist encoder: softmax? ', self.do_softmax)
 
     def forward(self, x):
         e = self.enc(x)
@@ -146,7 +147,6 @@ class Dec(nn.Module):
 
 class MNIST(VAE):
     """ Derive a specific sub-class of a VAE for MNIST. """
-
     def __init__(self, params):
         self.do_softmax = params.softmax
         super(MNIST, self).__init__(
