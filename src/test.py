@@ -9,20 +9,28 @@ random.seed(11)
 # 3-dim Cross entropy
 # 4 class
 # bs = 4
-i = torch.randn((4, 4, 3))
+bs = 2
+i = torch.randn((bs, 4, 3))
 
-i_dim1 = i[:, :, 0].clone()
-i_dim2 = i[:, :, 1].clone()
-i_dim3 = i[:, :, 2].clone()
+t1 = torch.tensor([1, 1, 0, 0], dtype=torch.int64)
 
-t_dim1 = torch.ones((4, 4, 1))
-t_dim2 = torch.ones((4, 4, 1))
-t_dim3 = torch.ones((4, 4, 1))
 
-t = torch.cat([t_dim1, t_dim2, t_dim3], dim=2)
+loss_fn_2 = nn.NLLLoss(reduction='none')
 
-loss_fn = nn.CrossEntropyLoss(reduction='none')
-loss_t = loss_fn(i, t)
+for d in i:
+    print(d)
+    print(t1)
+    loss_t_2 = loss_fn_2(d, t1)
+    print(loss_t_2)
+    print('--')
+
+
+
+
+
+
+exit()
+
 print(loss_t)
 print(loss_t.shape)
 print('-'*20)
@@ -43,4 +51,9 @@ print(loss_3.shape)
 print(loss_3)
 print('+'*10)
 
+print((loss_1 + loss_2 + loss_3).mean())
 
+
+loss_fn = nn.CrossEntropyLoss()
+loss_t = loss_fn(i, t)
+print(loss_t)

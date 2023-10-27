@@ -6,7 +6,6 @@ from collections import defaultdict
 from pathlib import Path
 from tempfile import mkdtemp
 
-
 import numpy as np
 import torch
 from torch import optim
@@ -17,7 +16,7 @@ import objectives
 from utils import Logger, Timer, save_model, save_vars, unpack_data
 from tqdm import trange
 from torchsummary import summary
-from vis import custom_plot_loss
+from vis import custom_plot_loss, custom_plot_loss_2x2
 
 parser = argparse.ArgumentParser(description='Multi-Modal VAEs')
 parser.add_argument('--experiment', type=str, default='', metavar='E',
@@ -30,7 +29,7 @@ parser.add_argument('--model', type=str, default='mnist_svhn', metavar='M',
 #                     help='number of hidden layers in enc and dec (default: 1)')
 
 parser.add_argument('--obj', type=str, default='elbo', metavar='O',
-                    choices=['elbo', 'iwae', 'dreg', 'elbo_naive', 'modified_elbo_naive'],
+                    choices=['elbo', 'iwae', 'dreg', 'elbo_naive', 'elbo_all', 'infoNCE_naive', 'infoNCE_naive_v2', 'infoNCE_v2', 'infoNCE_nlll'],
                     help='objective to use (default: elbo)')
 parser.add_argument('--K', type=int, default=20, metavar='K',
                     help='number of particles to use for iwae/dreg (default: 10)')
@@ -86,7 +85,7 @@ parser.add_argument('--dm', type=int, default=30, metavar='N',
 args = parser.parse_args()
 # keep it?
 args.softmax = True if args.distr == 'Laplace' else False
-
+# args.obj = 'elbo_all' if args.model == 'fummvae' else args.abj
 
 # random seed
 # https://pytorch.org/docs/stable/notes/randomness.html
@@ -120,7 +119,7 @@ print(model)
 if pretrained_path:
     print('Loading model {} from {}'.format(model.modelName, pretrained_path))
     model.load_state_dict(torch.load(pretrained_path + '/model.rar'))
-    model._pz_params = model._pz_params
+    model._pz_params = model._pz_params # ? in fummvae this will make a problem
 
 if not args.experiment:
     args.experiment = model.modelName
@@ -130,7 +129,6 @@ runId = datetime.datetime.now().isoformat()
 experiment_dir = Path('../experiments/' + args.experiment)
 experiment_dir.mkdir(parents=True, exist_ok=True)
 runPath = mkdtemp(prefix=runId, dir=str(experiment_dir))
-
 last_epoch_res = Path(f'{runPath}/final-gen-recons') # for last epoch gen/recons
 last_epoch_res.mkdir(parents=True, exist_ok=True)
 
@@ -138,6 +136,9 @@ sys.stdout = Logger('{}/run.log'.format(runPath))
 print('Expt:', runPath)
 print('RunID:', runId)
 print('args: ', args)
+command_line_args = sys.argv
+command = ' '.join(command_line_args)
+print(f"The command that ran this script: {command}")
 
 # save args to run
 with open('{}/args.json'.format(runPath), 'w') as fp:
@@ -149,6 +150,7 @@ torch.save(args, '{}/args.rar'.format(runPath))
 lr = 1e-3
 optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()),
                        lr=lr, amsgrad=True)
+
 if hasattr(model, 'vaes'):
     train_loader, test_loader = model.getDataLoaders(args.batch_size, device=device, max_d=args.max_d, dm=args.dm)
 else:    
@@ -176,21 +178,45 @@ def train_factorized(epoch, agg):
         data = unpack_data(dataT, device=device) # [bs, num_channels, img_size, img_size]
         # for mnist_svhn multimodal setting: 
         # data[0] -> [bs, 1, 28, 28]
-        # data[2] -> [bs, 3, 32, 32]
+        # data[1] -> [bs, 3, 32, 32]
 
         optimizer.zero_grad()
-        loss_mmvae, loss_mnist, loss_svhn = objective(model, data, agg, phase='train', K=args.K)
-        loss_mmvae.backward()
-        loss_mnist.backward()
-        loss_svhn.backward()
+
+        # loss_mmvae, loss_mnist, loss_svhn = objective(model, data, agg, phase='train', K=args.K)
+        # loss_mmvae.backward()
+        # loss_mnist.backward()
+        # loss_svhn.backward()
+        total_loss = -objective(model, data, agg, phase='train', K=args.K)
+        total_loss.backward()
 
         optimizer.step()
-
+        
         if i == 0: 
             model.reconstruct(data, runPath, epoch, is_train=True)
         
         i += 1
-        
+
+    
+def test_factorized(epoch, agg):
+    model.eval()
+    with torch.no_grad():
+        i = 0
+        for dataT in tqdm(test_loader):
+            data = unpack_data(dataT, device=device)
+            
+            # loss_mmvae, loss_mnist, loss_svhn = t_objective(model, data, agg, phase='train', K=args.K)
+            total_loss = -t_objective(model, data, agg, phase='train', K=args.K)
+
+            if epoch == args.epochs and (i < 10): 
+                model.reconstruct(data, f'{runPath}/final-gen-recons', epoch+i)
+                # reconstruct and kl_map more samples in last epoch
+            if i == 0:
+                model.reconstruct(data, runPath, epoch)
+                if not args.no_analytics:
+                    model.analyse(data, runPath, epoch)
+            i += 1
+
+
 def train(epoch, agg):
     model.train()
     b_loss = 0
@@ -203,7 +229,7 @@ def train(epoch, agg):
         
         # for mnist_svhn multimodal setting: 
         # data[0] -> [bs, 1, 28, 28]
-        # data[1] -> [bs, 3, 32, 32]
+        # data[2] -> [bs, 3, 32, 32]
 
         optimizer.zero_grad()
         loss = -objective(model, data, agg, phase='train', K=args.K)
@@ -257,7 +283,6 @@ def test(epoch, agg):
     print('====> Epoch: {:03d} Test loss: {:.4f}, Test lpx_z: {:.4f}, Test kl: {:.4f}'.format(epoch, agg['test_epoch_loss'][-1], \
         agg['test_epoch_lpx_z'][-1], agg['test_epoch_kl'][-1]))
 
-
 def estimate_log_marginal(K):
     """Compute an IWAE estimate of the log-marginal likelihood of test data."""
     model.eval()
@@ -279,17 +304,38 @@ if __name__ == '__main__':
         agg = defaultdict(list)
 
         for epoch in trange(1, args.epochs + 1):
-            train(epoch, agg)
-            test(epoch, agg)
+            if hasattr(model, 'vaes') and hasattr(model, 'mmvae'): # fummvae         
+                train_factorized(epoch, agg)
+                test_factorized(epoch, agg) # oct
+            else:
+                train(epoch, agg)
+                test(epoch, agg)
+
             save_model(model, runPath + '/model.rar')
             save_vars(agg, runPath + '/losses.rar')
             # model.generate(runPath, epoch)
             model.generate(runPath, epoch, only_mean=True)
             
-            custom_plot_loss(loss_dict=agg, keys_to_plot=['train_lp0_x0_z_0', 'train_lp1_x1_z_1'], title='normal reconstruction loss', name_to_save='train normal gen loss', runPath=runPath)
-            custom_plot_loss(loss_dict=agg, keys_to_plot=['train_lp1_x1_z_0', 'train_lp0_x0_z_1'], title='cross reconstruction loss', name_to_save='train cross gen loss', runPath=runPath)
-            custom_plot_loss(loss_dict=agg, keys_to_plot=['train_kl_q0_pz', 'train_kl_q1_pz'], title='kl losses', name_to_save='kl losses', runPath=runPath)
-        
+            if isinstance(model, models.VAE_mnist) or isinstance(model, models.VAE_svhn): 
+                custom_plot_loss(loss_dict=agg, keys_to_plot=['train_lpx_z', 'train_kl'], title='train UNI VAE', name_to_save='train unimodal losses', runPath=runPath)
+                custom_plot_loss(loss_dict=agg, keys_to_plot=['test_lpx_z', 'test_kl'], title='test UNI VAE', name_to_save='test unimodal losses', runPath=runPath)
+                
+            # mmvae
+            custom_plot_loss(loss_dict=agg, keys_to_plot=['train_lp0_x0_z_0', 'train_lp1_x1_z_1'], title='normal reconstruction loss', name_to_save='train mmvae normal gen loss', runPath=runPath)
+            custom_plot_loss(loss_dict=agg, keys_to_plot=['train_lp1_x1_z_0', 'train_lp0_x0_z_1'], title='cross reconstruction loss', name_to_save='train mmvae cross gen loss', runPath=runPath)
+            custom_plot_loss(loss_dict=agg, keys_to_plot=['train_kl_q0_pz', 'train_kl_q1_pz'], title='kl losses', name_to_save='train mmvae_kl losses', runPath=runPath)
+
+            # uni vae
+            custom_plot_loss(loss_dict=agg, keys_to_plot=['mnist_train_lpx_z', 'mnist_train_kl'], title='MNIST UNI VAE', name_to_save='train unimodal mnist losses', runPath=runPath)
+            custom_plot_loss(loss_dict=agg, keys_to_plot=['svhn_train_lpx_z', 'svhn_train_kl'], title='SVHN UNI VAE', name_to_save='train unimodal svhn losses', runPath=runPath)  
+
+            # infoNCE:
+            custom_plot_loss_2x2(loss_dict=agg, keys_to_plot=['train_inf_mnist_1','train_inf_mnist_2', 'train_inf_mnist_3', 'train_inf_mnist_4'], title='MNIST info -train', name_to_save='train info MNIST', runPath=runPath)
+            custom_plot_loss_2x2(loss_dict=agg, keys_to_plot=['train_inf_svhn_1','train_inf_svhn_2', 'train_inf_svhn_3', 'train_inf_svhn_4'], title='SVHN info -train', name_to_save='train info SVHN', runPath=runPath)
+
+            custom_plot_loss(loss_dict=agg, keys_to_plot=['train_loss_inf_mnist', 'train_loss_inf_svhn'], title='MNIST SVHN INFO #', name_to_save='MNIST SVHN INFO -train', runPath=runPath)  
+
+
         # generate more samples
         for gen_indx in range(10):
             model.generate(f'{runPath}/final-gen-recons', epoch+gen_indx, only_mean=True)

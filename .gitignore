@@ -23,14 +23,12 @@ bin-release/
 *.zip
 *.json
 *.txt
-*.png
 *.html 
 *.mat
 *.rar
 *.csv
 *.pyc
 *.zip
-*.png 
 *.jpg 
 *.pdf 
 *.xopp

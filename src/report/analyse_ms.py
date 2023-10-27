@@ -51,17 +51,19 @@ train_loader, test_loader = model.getDataLoaders(B, device=device)
 N = len(test_loader.dataset)
 
 
-def classify_latents(epochs, option):
+def classify_latents(epochs, option, disentangled=False):
+    print('classifiy latents, option: ', option, 'dis.:', disentangled)
+
     model.eval()
-    vae = unpack_model(option)
-    if '_' not in args.model:
-        epochs *= 10  # account for the fact the mnist-svhn has more examples (roughly x10) 
+    vae = unpack_model(option, disentangled)
+    # if '_' not in args.model and args.model != 'fummmvae':
+    #     epochs *= 10  # account for the fact the mnist-svhn has more examples (roughly x10) 
     
     classifier = Latent_Classifier(args.latent_dim, 10).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(classifier.parameters(), lr=0.001)
 
-    for epoch in range(epochs):  # loop over the dataset multiple times
+    for epoch in trange(epochs):  # loop over the dataset multiple times
         running_loss = 0.0
         total_iters = len(train_loader)
         print('\n====> Epoch: {:03d} '.format(epoch))
@@ -167,7 +169,11 @@ def cross_coherence(epochs):
         for i, data in enumerate(test_loader):
             mnist, svhn, targets = unpack_data_mlp(data, option='both')
             mnist, svhn, targets = mnist.to(device), svhn.to(device), targets.to(device)
-            _, px_zs, _ = model([mnist, svhn], 1)
+            if args.model == 'fummvae':
+                _, px_zs, _ = model.mmvae([mnist, svhn], 1)
+            else: 
+                _, px_zs, _ = model([mnist, svhn], 1)
+                
             mnist_mnist = mnist_net(px_zs[1][0].mean.squeeze(0))
             svhn_svhn = svhn_net(px_zs[0][1].mean.squeeze(0))
 
@@ -193,10 +199,15 @@ def joint_coherence():
     total = 0
     corr = 0
     with torch.no_grad():
-        pzs = model.pz(*model.pz_params).sample([10000])
-        mnist = model.vaes[0].dec(pzs)
-        svhn = model.vaes[1].dec(pzs)
-
+        if args.model == 'fummvae':
+            pzs = model.mmvae.pz(*model.mmvae.pz_params).sample([10000])
+            mnist = model.mmvae.vaes[0].dec(pzs)
+            svhn = model.mmvae.vaes[1].dec(pzs)
+        else:
+            pzs = model.pz(*model.pz_params).sample([10000])
+            mnist = model.vaes[0].dec(pzs)
+            svhn = model.vaes[1].dec(pzs)
+        
         mnist_mnist = mnist_net(mnist[0].squeeze(1))
         svhn_svhn = svhn_net(svhn[0].squeeze(1))
 
@@ -220,34 +231,51 @@ def unpack_data_mlp(dataB, option='both'):
         return dataB
 
 
-def unpack_model(option='svhn'):
-    if 'mnist_svhn' in args.model:
-        return model.vaes[1] if option == 'svhn' else model.vaes[0]
-    else:
-        return model
+def unpack_model(option='svhn', disentangled = False):
+    if args.model == 'fummvae': 
+        if disentangled: 
+            return model.mmvae.vaes[1] if option == 'svhn' else model.mmvae.vaes[0]
+        else:
+            return model.vaes[1] if option == 'svhn' else model.mmvae.vaes[0]
+            
+    else: 
+        if 'mnist_svhn' in args.model:
+            return model.vaes[1] if option == 'svhn' else model.vaes[0]
+        else:
+            return model
 
 # ~/Storage/MultiModal - FUM/experiments/MNIST 2/2023-07-13T00:31:30.722038z6v79vf6
 
 if __name__ == '__main__':
     with Timer('MM-VAE analysis') as t:
         print(device)
+
+        ### joint_coherence
+        print('\n' + '-' * 45 + 'joint coherence' + '-' * 45)
+        joint_coherence()
+
         # train pre-trained mnist, svhn classifiers: 
         # print('-' * 25 + 'latent classification accuracy' + '-' * 25)
         
         # # # # latent factorization (acc) for unimodal mnist vae 
-        # print("Calculating latent classification accuracy for single MNIST VAE...")
-        # classify_latents(epochs=30, option='mnist')
 
-        # # # # latent factorization (acc) for single svhn vae 
-        # print("\n Calculating latent classification accuracy for single SVHN VAE...")
-        # classify_latents(epochs=30, option='svhn')
+        print("\n Calculating latent classification accuracy for single MNIST VAE...")
+        if args.model == 'fummvae':
+            classify_latents(epochs=3, option='svhn', disentangled=True)
+            classify_latents(epochs=3, option='svhn', disentangled=False)
+        else:
+            classify_latents(epochs=3, option='svhn')
         
-        # # # setting option='both' in classify_latents() function is used for multimodal? 
+        print("\n Calculating latent classification accuracy for single MNIST VAE...")
+        if args.model == 'fummvae':
+            classify_latents(epochs=3, option='mnist', disentangled=True)
+            classify_latents(epochs=3, option='mnist', disentangled=False)
+        else:
+            classify_latents(epochs=3, option='mnist')
+        
 
-        # # # # cross_coherence
+        #### cross_coherence
         print('\n' + '-' * 45 + 'cross coherence' + '-' * 45)
         cross_coherence(epochs=3)
         
-        # # # # joint_coherence
-        # print('\n' + '-' * 45 + 'joint coherence' + '-' * 45)
-        # joint_coherence()
+

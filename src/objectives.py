@@ -294,6 +294,7 @@ def m_infoNCE_naive(model, x, loss_log, phase, K=1):
 
     # infoNCE: 
     loss_fn = torch.nn.CrossEntropyLoss() # reduction='none'
+    
 
     ## MNIST
     # qz_x_mnist, zs_mnist 
@@ -321,7 +322,9 @@ def m_infoNCE_naive(model, x, loss_log, phase, K=1):
         torch.zeros((inf_mnist.shape[0], 2, inf_mnist.shape[-1]), device=inf_mnist.device),
     ], dim=1)
 
-    loss_fn = torch.nn.CrossEntropyLoss() # reduction='none'
+    print(inf_mnist.shape)
+    print(target_mnist.shape)
+
     loss_inf_mnist = loss_fn(inf_mnist, target_mnist) # with reduction='none', size of the loss is [bs, latent_dim]
 
     #### v2
@@ -370,136 +373,6 @@ def m_infoNCE_naive(model, x, loss_log, phase, K=1):
     alpha = 1.0
     total_loss = (mmvae_loss + uni_mnist_loss + uni_svhn_loss) - alpha*(loss_inf_mnist+loss_inf_svhn)
     return total_loss
-
-
-def m_infoNCE_v2(model, x, loss_log, phase, K=1):
-    # ELBO uni-mnist
-    qz_x_mnist, px_z_mnist, zs_mnist = model.vaes[0](x[0])  
-    lpx_z = px_z_mnist.log_prob(x[0]).view(*px_z_mnist.batch_shape[:2], -1) * model.vaes[0].llik_scaling 
-    kld = kl_divergence(qz_x_mnist, model.vaes[0].pz(*model.vaes[0].pz_params)) 
-    lpx_z_sum = lpx_z.sum(-1) 
-    kl_sum = kld.sum(-1) 
-    loss_log[f'mnist_{phase}_lpx_z'].append(lpx_z_sum.mean().item())
-    loss_log[f'mnist_{phase}_kl'].append(kl_sum.mean().item())
-    uni_mnist_loss = (lpx_z_sum - kl_sum).mean(0).sum()
-    
-    # ELBO uni-svhn
-    qz_x_svhn, px_z_svhn, zs_svhn = model.vaes[1](x[1])  
-    lpx_z = px_z_svhn.log_prob(x[1]).view(*px_z_svhn.batch_shape[:2], -1) * model.vaes[1].llik_scaling 
-    kld = kl_divergence(qz_x_svhn, model.vaes[1].pz(*model.vaes[1].pz_params)) 
-    lpx_z_sum = lpx_z.sum(-1) 
-    kl_sum = kld.sum(-1) 
-    loss_log[f'svhn_{phase}_lpx_z'].append(lpx_z_sum.mean().item())
-    loss_log[f'svhn_{phase}_kl'].append(kl_sum.mean().item())
-    uni_svhn_loss = (lpx_z_sum - kl_sum).mean(0).sum()
-    
-    # MMVAE naive ELBO: 
-    qz_xs_mmvae, px_zs_mmvae, zss_mmvae = model.mmvae(x, K=1) 
-    lpx_zs, klds = [], []
-    for r, qz_x in enumerate(qz_xs_mmvae):
-        kld = kl_divergence(qz_x, model.mmvae.pz(*model.mmvae.pz_params))
-        klds.append(kld.sum(-1))
-        for d in range(len(px_zs_mmvae)):
-            lpx_z = px_zs_mmvae[d][d].log_prob(x[d]).view(*px_zs_mmvae[d][d].batch_shape[:2], -1)
-            lpx_z = (lpx_z * model.mmvae.vaes[d].llik_scaling).sum(-1)
-            if d == r:
-                lwt = torch.tensor(0.0)
-            else:
-                zs = zss_mmvae[d].detach()
-                
-                lwt = (qz_x.log_prob(zs) - qz_xs_mmvae[d].log_prob(zs).detach()).sum(-1)
-
-            lpx_zs.append(lwt.exp() * lpx_z)
-
-    loss_log[f'mmvae_{phase}_lp0_x0_z_0'].append(lpx_zs[0].mean().item())
-    loss_log[f'mmvae_{phase}_lp1_x1_z_0'].append(lpx_zs[1].mean().item())
-    loss_log[f'mmvae_{phase}_lp0_x0_z_1'].append(lpx_zs[2].mean().item())
-    loss_log[f'mmvae_{phase}_lp1_x1_z_1'].append(lpx_zs[3].mean().item())
-    loss_log[f'mmvae_{phase}_kl_q0_pz'].append(klds[0].mean().item())
-    loss_log[f'mmvae_{phase}_kl_q1_pz'].append(klds[1].mean().item())
-    
-    mmvae_loss = (1 / len(model.mmvae.vaes)) * (torch.stack(lpx_zs).sum(0) - torch.stack(klds).sum(0))
-    mmvae_loss = mmvae_loss.mean(0).sum()
-
-    # infoNCE: 
-    loss_fn = torch.nn.CrossEntropyLoss() # reduction='none'
-
-    ## MNIST
-    # qz_x_mnist, zs_mnist 
-    # qz_xs_mmvae[0], zss_mmvae[0]
-    inf_mnist_1 = qz_xs_mmvae[0].log_prob(zss_mmvae[0]).exp() # ==1, # [K=1, bs, latent_dim] 
-    inf_mnist_2 = qz_x_mnist.log_prob(zs_mnist).exp() # ==1, # [K=1, bs, latent_dim] 
-    inf_mnist_3 = qz_x_mnist.log_prob(zss_mmvae[0]).exp() # ==0
-    inf_mnist_4 = qz_xs_mmvae[0].log_prob(zs_mnist).exp() # ==0
-    
-    loss_log[f'{phase}_inf_mnist_1'].append(inf_mnist_1.mean().item()) # 1
-    loss_log[f'{phase}_inf_mnist_2'].append(inf_mnist_2.mean().item()) # 1
-    loss_log[f'{phase}_inf_mnist_3'].append(inf_mnist_3.mean().item()) # 1
-    loss_log[f'{phase}_inf_mnist_4'].append(inf_mnist_4.mean().item()) # 1
-    
-    inf_mnist_1 = inf_mnist_1.mean(0)[:, None, :]
-    inf_mnist_2 = inf_mnist_2.mean(0)[:, None, :]
-    inf_mnist_3 = inf_mnist_3.mean(0)[:, None, :]
-    inf_mnist_4 = inf_mnist_4.mean(0)[:, None, :]
-    
-    #### v1
-    inf_mnist = torch.cat([inf_mnist_1, inf_mnist_2, inf_mnist_3, inf_mnist_4], dim=1) # [bs, 4, latent_dim]
-    
-    target_mnist = torch.cat([
-        torch.ones((inf_mnist.shape[0], 2, inf_mnist.shape[-1]), device=inf_mnist.device),
-        torch.zeros((inf_mnist.shape[0], 2, inf_mnist.shape[-1]), device=inf_mnist.device),
-    ], dim=1)
-
-    loss_fn = torch.nn.CrossEntropyLoss() # reduction='none'
-    loss_inf_mnist = loss_fn(inf_mnist, target_mnist) # with reduction='none', size of the loss is [bs, latent_dim]
-
-    #### v2
-    # inf_mnist =  torch.cat([inf_mnist_1, inf_mnist_2, inf_mnist_3, inf_mnist_4], dim=1).mean(2) # MEAN ACROSS LATENT [bs, 4]
-    # target_mnist = torch.cat([
-    #     torch.ones((inf_mnist.shape[0], 2), device=inf_mnist.device),
-    #     torch.zeros((inf_mnist.shape[0], 2), device=inf_mnist.device),
-    # ], dim=1)
-
-    # loss_inf_mnist = loss_fn(inf_mnist, target_mnist) # with reduction='none', size of the loss is [bs]
-
-    #### v3
-    # loss_inf_mnist = ((inf_mnist_1+inf_mnist_2)- (inf_mnist_3+ inf_mnist_4)).mean()
-
-    ## SVHN
-    # qz_x_svhn, zs_svhn
-    # qz_xs_mmvae[1], zss_mmvae[1]
-    inf_svhn_1 = qz_xs_mmvae[1].log_prob(zss_mmvae[1]).exp() # == 1
-    inf_svhn_2 = qz_x_svhn.log_prob(zs_svhn).exp() # == 1 
-    
-    inf_svhn_3 = qz_x_svhn.log_prob(zss_mmvae[1]).exp() # ==0
-    inf_svhn_4 = qz_xs_mmvae[1].log_prob(zs_svhn).exp() # ==0
-    
-    loss_log[f'{phase}_inf_svhn_1'].append(inf_svhn_1.mean().item()) # 1
-    loss_log[f'{phase}_inf_svhn_2'].append(inf_svhn_2.mean().item()) # 1
-    loss_log[f'{phase}_inf_svhn_3'].append(inf_svhn_3.mean().item()) # 1
-    loss_log[f'{phase}_inf_svhn_4'].append(inf_svhn_4.mean().item()) # 1
-    
-    inf_svhn_1 = inf_svhn_1.mean(0)[:, None, :]
-    inf_svhn_2 = inf_svhn_2.mean(0)[:, None, :]
-    inf_svhn_3 = inf_svhn_3.mean(0)[:, None, :]
-    inf_svhn_4 = inf_svhn_4.mean(0)[:, None, :]
-    
-    inf_svhn = torch.cat([inf_svhn_1, inf_svhn_2, inf_svhn_3, inf_svhn_4], dim=1) # [bs, 4, latent_dim]
-    
-    target_svhn = torch.cat([
-        torch.ones((inf_svhn.shape[0], 2, inf_svhn.shape[-1]), device=inf_svhn.device),
-        torch.zeros((inf_svhn.shape[0], 2, inf_svhn.shape[-1]), device=inf_svhn.device),
-    ], dim=1)
-
-    loss_inf_svhn = loss_fn(inf_svhn, target_svhn) # with reduction='none', size of the loss is [bs, latent_dim]
-
-    loss_log[f'{phase}_loss_inf_mnist'].append(loss_inf_mnist.item())
-    loss_log[f'{phase}_loss_inf_svhn'].append(loss_inf_svhn.item())
-    
-    alpha = 1.0
-    total_loss = (mmvae_loss + uni_mnist_loss + uni_svhn_loss) - alpha*(loss_inf_mnist+loss_inf_svhn)
-    return total_loss
-
 
 
 
@@ -754,3 +627,135 @@ def m_dreg_looser(model, x, loss_log, phase, K=1):
 #     # [K, bs]
     
 #     return obj.mean(0).sum() # mean across K, the sum across batch_size
+
+"""
+
+def m_infoNCE_v2(model, x, loss_log, phase, K=1):
+    # ELBO uni-mnist
+    qz_x_mnist, px_z_mnist, zs_mnist = model.vaes[0](x[0])  
+    lpx_z = px_z_mnist.log_prob(x[0]).view(*px_z_mnist.batch_shape[:2], -1) * model.vaes[0].llik_scaling 
+    kld = kl_divergence(qz_x_mnist, model.vaes[0].pz(*model.vaes[0].pz_params)) 
+    lpx_z_sum = lpx_z.sum(-1) 
+    kl_sum = kld.sum(-1) 
+    loss_log[f'mnist_{phase}_lpx_z'].append(lpx_z_sum.mean().item())
+    loss_log[f'mnist_{phase}_kl'].append(kl_sum.mean().item())
+    uni_mnist_loss = (lpx_z_sum - kl_sum).mean(0).sum()
+    
+    # ELBO uni-svhn
+    qz_x_svhn, px_z_svhn, zs_svhn = model.vaes[1](x[1])  
+    lpx_z = px_z_svhn.log_prob(x[1]).view(*px_z_svhn.batch_shape[:2], -1) * model.vaes[1].llik_scaling 
+    kld = kl_divergence(qz_x_svhn, model.vaes[1].pz(*model.vaes[1].pz_params)) 
+    lpx_z_sum = lpx_z.sum(-1) 
+    kl_sum = kld.sum(-1) 
+    loss_log[f'svhn_{phase}_lpx_z'].append(lpx_z_sum.mean().item())
+    loss_log[f'svhn_{phase}_kl'].append(kl_sum.mean().item())
+    uni_svhn_loss = (lpx_z_sum - kl_sum).mean(0).sum()
+    
+    # MMVAE naive ELBO: 
+    qz_xs_mmvae, px_zs_mmvae, zss_mmvae = model.mmvae(x, K=1) 
+    lpx_zs, klds = [], []
+    for r, qz_x in enumerate(qz_xs_mmvae):
+        kld = kl_divergence(qz_x, model.mmvae.pz(*model.mmvae.pz_params))
+        klds.append(kld.sum(-1))
+        for d in range(len(px_zs_mmvae)):
+            lpx_z = px_zs_mmvae[d][d].log_prob(x[d]).view(*px_zs_mmvae[d][d].batch_shape[:2], -1)
+            lpx_z = (lpx_z * model.mmvae.vaes[d].llik_scaling).sum(-1)
+            if d == r:
+                lwt = torch.tensor(0.0)
+            else:
+                zs = zss_mmvae[d].detach()
+                
+                lwt = (qz_x.log_prob(zs) - qz_xs_mmvae[d].log_prob(zs).detach()).sum(-1)
+
+            lpx_zs.append(lwt.exp() * lpx_z)
+
+    loss_log[f'mmvae_{phase}_lp0_x0_z_0'].append(lpx_zs[0].mean().item())
+    loss_log[f'mmvae_{phase}_lp1_x1_z_0'].append(lpx_zs[1].mean().item())
+    loss_log[f'mmvae_{phase}_lp0_x0_z_1'].append(lpx_zs[2].mean().item())
+    loss_log[f'mmvae_{phase}_lp1_x1_z_1'].append(lpx_zs[3].mean().item())
+    loss_log[f'mmvae_{phase}_kl_q0_pz'].append(klds[0].mean().item())
+    loss_log[f'mmvae_{phase}_kl_q1_pz'].append(klds[1].mean().item())
+    
+    mmvae_loss = (1 / len(model.mmvae.vaes)) * (torch.stack(lpx_zs).sum(0) - torch.stack(klds).sum(0))
+    mmvae_loss = mmvae_loss.mean(0).sum()
+
+    # infoNCE: 
+    loss_fn = torch.nn.CrossEntropyLoss() # reduction='none'
+
+    ## MNIST
+    # qz_x_mnist, zs_mnist 
+    # qz_xs_mmvae[0], zss_mmvae[0]
+    inf_mnist_1 = qz_xs_mmvae[0].log_prob(zss_mmvae[0]).exp() # ==1, # [K=1, bs, latent_dim] 
+    inf_mnist_2 = qz_x_mnist.log_prob(zs_mnist).exp() # ==1, # [K=1, bs, latent_dim] 
+    inf_mnist_3 = qz_x_mnist.log_prob(zss_mmvae[0]).exp() # ==0
+    inf_mnist_4 = qz_xs_mmvae[0].log_prob(zs_mnist).exp() # ==0
+    
+    loss_log[f'{phase}_inf_mnist_1'].append(inf_mnist_1.mean().item()) # 1
+    loss_log[f'{phase}_inf_mnist_2'].append(inf_mnist_2.mean().item()) # 1
+    loss_log[f'{phase}_inf_mnist_3'].append(inf_mnist_3.mean().item()) # 1
+    loss_log[f'{phase}_inf_mnist_4'].append(inf_mnist_4.mean().item()) # 1
+    
+    inf_mnist_1 = inf_mnist_1.mean(0)[:, None, :]
+    inf_mnist_2 = inf_mnist_2.mean(0)[:, None, :]
+    inf_mnist_3 = inf_mnist_3.mean(0)[:, None, :]
+    inf_mnist_4 = inf_mnist_4.mean(0)[:, None, :]
+    
+    #### v1
+    inf_mnist = torch.cat([inf_mnist_1, inf_mnist_2, inf_mnist_3, inf_mnist_4], dim=1) # [bs, 4, latent_dim]
+    
+    target_mnist = torch.cat([
+        torch.ones((inf_mnist.shape[0], 2, inf_mnist.shape[-1]), device=inf_mnist.device),
+        torch.zeros((inf_mnist.shape[0], 2, inf_mnist.shape[-1]), device=inf_mnist.device),
+    ], dim=1)
+
+    loss_fn = torch.nn.CrossEntropyLoss() # reduction='none'
+    loss_inf_mnist = loss_fn(inf_mnist, target_mnist) # with reduction='none', size of the loss is [bs, latent_dim]
+
+    #### v2
+    # inf_mnist =  torch.cat([inf_mnist_1, inf_mnist_2, inf_mnist_3, inf_mnist_4], dim=1).mean(2) # MEAN ACROSS LATENT [bs, 4]
+    # target_mnist = torch.cat([
+    #     torch.ones((inf_mnist.shape[0], 2), device=inf_mnist.device),
+    #     torch.zeros((inf_mnist.shape[0], 2), device=inf_mnist.device),
+    # ], dim=1)
+
+    # loss_inf_mnist = loss_fn(inf_mnist, target_mnist) # with reduction='none', size of the loss is [bs]
+
+    #### v3
+    # loss_inf_mnist = ((inf_mnist_1+inf_mnist_2)- (inf_mnist_3+ inf_mnist_4)).mean()
+
+    ## SVHN
+    # qz_x_svhn, zs_svhn
+    # qz_xs_mmvae[1], zss_mmvae[1]
+    inf_svhn_1 = qz_xs_mmvae[1].log_prob(zss_mmvae[1]).exp() # == 1
+    inf_svhn_2 = qz_x_svhn.log_prob(zs_svhn).exp() # == 1 
+    
+    inf_svhn_3 = qz_x_svhn.log_prob(zss_mmvae[1]).exp() # ==0
+    inf_svhn_4 = qz_xs_mmvae[1].log_prob(zs_svhn).exp() # ==0
+    
+    loss_log[f'{phase}_inf_svhn_1'].append(inf_svhn_1.mean().item()) # 1
+    loss_log[f'{phase}_inf_svhn_2'].append(inf_svhn_2.mean().item()) # 1
+    loss_log[f'{phase}_inf_svhn_3'].append(inf_svhn_3.mean().item()) # 1
+    loss_log[f'{phase}_inf_svhn_4'].append(inf_svhn_4.mean().item()) # 1
+    
+    inf_svhn_1 = inf_svhn_1.mean(0)[:, None, :]
+    inf_svhn_2 = inf_svhn_2.mean(0)[:, None, :]
+    inf_svhn_3 = inf_svhn_3.mean(0)[:, None, :]
+    inf_svhn_4 = inf_svhn_4.mean(0)[:, None, :]
+    
+    inf_svhn = torch.cat([inf_svhn_1, inf_svhn_2, inf_svhn_3, inf_svhn_4], dim=1) # [bs, 4, latent_dim]
+    
+    target_svhn = torch.cat([
+        torch.ones((inf_svhn.shape[0], 2, inf_svhn.shape[-1]), device=inf_svhn.device),
+        torch.zeros((inf_svhn.shape[0], 2, inf_svhn.shape[-1]), device=inf_svhn.device),
+    ], dim=1)
+
+    loss_inf_svhn = loss_fn(inf_svhn, target_svhn) # with reduction='none', size of the loss is [bs, latent_dim]
+
+    loss_log[f'{phase}_loss_inf_mnist'].append(loss_inf_mnist.item())
+    loss_log[f'{phase}_loss_inf_svhn'].append(loss_inf_svhn.item())
+    
+    alpha = 1.0
+    total_loss = (mmvae_loss + uni_mnist_loss + uni_svhn_loss) - alpha*(loss_inf_mnist+loss_inf_svhn)
+    return total_loss
+
+"""
