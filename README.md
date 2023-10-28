@@ -5,13 +5,14 @@
 This is equivalent to the original VAE objective for the unimodal case:
 
 ```math
-ELBO(x) = \underbrace{\mathbf{E}_{q_{\phi}(z|x)}(log \; p_{\theta}(x|z))}_\text{Reconstruction Term} - \underbrace{D_{KL}(q_{\phi}(z|x) \; || \; p_{\theta}(z))}_\text{Regularization Term}
+ELBO(x) = \underbrace{\mathbb{E}_{q_{\phi}(z|x)}(log \; p_{\theta}(x|z))}_\text{Reconstruction Term} - \underbrace{D_{KL}(q_{\phi}(z|x) \; || \; p_{\theta}(z))}_\text{Regularization Term}
 ```
 such that $q_{\phi}(z|x)$, the encoder is an inference network, and the $p_{\theta}(x|z)$, the decoder is a deep neural network. The overview pipeline for uni-modal training is as follows: 
 
 <p align="center" width="100%">
     <img width="70%" src="https://github.com/hamedrq7/mmvae/blob/main/readme%20media/unimodal.png">
 </p>
+
 ### Effect of `decoder_scale`:
 Various value for `decoder_scale` was tested (0.05, 0.2, 0.35, 0.5, 0.75, 0.9) and their effectiveness and optimal value were found. setting `decoder_scale` to `0.75` gave a good balance between generation quality and reconstruction quality. some of the generated images (from SVHN modality) and reconstructed images (from MNIST modality) for 0.2, 0.75, and 0.9 are show below: 
 
@@ -40,7 +41,7 @@ Various value for `decoder_scale` was tested (0.05, 0.2, 0.35, 0.5, 0.75, 0.9) a
 </table>
 <p></p>
 
-by looking at $q(z|x)$ for one batch of test data and `batch_size` number of samples from $p(z)$ (reduced to 2D using UMAP), it can be seen that using lower value for `decoder_value` results in ___difference___ between pz and qzx and explains the poor generation from lower values of `decoder_scale`:
+by looking at $q(z|x)$ for one batch of test data and `batch_size` number of samples from $p(z)$ (reduced to 2D using UMAP), it can be seen that using lower value for `decoder_value` results in dissimilarity of pz and qzx which explains the poor generation from lower values of `decoder_scale`:
 
 <p align="center"></p>
 <table>
@@ -59,13 +60,9 @@ by looking at $q(z|x)$ for one batch of test data and `batch_size` number of sam
 </table>
 <p></p>
 
-## Distribution: 
-The original paper uses `Laplace` (link to pytorch as well) distr. for prior and posterior and applies softmax to scale output of encoder to constrain their scaling across the D
-dimensions to sum to D. Here we use Normal distr. and no softmax is applied. (no need for sharper edge...)
-
 ## Model Selection & Hyper-Parameters: 
 ### Model Architecture: 
-Using `elbo` as objective, batch size of 256, latent dimension of 20, `decoder_scale` set to 0.75, and setting $p_z$ to a normal distribution, various architectures (listed in table X) were tested for each MNIST and SVHN modality to select the best one. 
+Using `elbo` as objective, batch size of 256, latent dimension of 20, `decoder_scale` set to 0.75, and setting $p_z$ to a normal distribution, various architectures (listed in the table below) were tested for each MNIST and SVHN modality to select the best one. 
 
 | Fully Connected  | Convolutional |
 | ------------- | ------------- |
@@ -89,7 +86,7 @@ Note that synergy metric is proposed by [Relating by Contrasting: A Data-efficie
 
 ## Objectives:
 ### `m_elbo_naive()`: 
-based on Appendix. B, the basic MOE variational posterior for two modalities is: 
+based on Appendix. B, of the original mmvae paper, the basic MOE variational posterior for two modalities is: 
 ```math
 \mathcal{L}_{ELBO} = 
 \frac{1}{2}
@@ -133,7 +130,7 @@ log \frac{p_{\Theta} (z_2, x_2)}
 )
 ```
 
-Using Equation.2 and Equation.3 from the original VAE paper (link), we have: 
+Using Equation.2 and Equation.3 from [the original VAE paper](https://arxiv.org/abs/1312.6114), we have: 
 ```math
 \text{A} = \mathbb{E}_{z_1 \sim q_{\phi_1} (z | x_1)} 
 \left[
@@ -190,11 +187,13 @@ D_{KL} (q_{\phi_2} (z|x_2) || p(z))}_{B}
     <img width="40%" src="https://github.com/hamedrq7/mmvae/blob/main/readme%20media/path25.png">
     <img width="40%" src="https://github.com/hamedrq7/mmvae/blob/main/readme%20media/ezgif.com-gif-maker.gif">
 </p>
+
 #### Problem of naive elbo: 
 When analyzing the latent space of the MMVAE trained with naive ELBO, the MNIST and SVHN are separated, making cross-modal generation difficult: 
 <p align="middle" width="100%">
     <img width="40%" src="https://github.com/hamedrq7/mmvae/blob/main/readme%20media/mmvae_emb_umap_010.png">
 </p>
+
 This has a peculiar effect where MNIST-generated images appear to be fine and are supported by the MNIST latent accuracy of 93%; the SVHN-generated images, on the other hand, are half decent and half (almost) noise.
 <p align="center" width="100%">
     <img width="40%" src="https://github.com/hamedrq7/mmvae/blob/main/readme%20media/mmvae_gen_samples_0_015.png">
