@@ -194,7 +194,7 @@ When analyzing the latent space of the MMVAE trained with naive ELBO, the MNIST 
     <img width="40%" src="https://github.com/hamedrq7/mmvae/blob/main/readme%20media/mmvae_emb_umap_010.png">
 </p>
 
-This has a peculiar effect where MNIST-generated images appear to be fine and are supported by the MNIST latent accuracy of 93%; the SVHN-generated images, on the other hand, are half decent and half (almost) noise.
+This has a peculiar effect where MNIST-generated images appear to be fine and are supported by the MNIST latent accuracy of 93%; the SVHN-generated images, on the other hand, are half decent and half noisy.
 <p align="center" width="100%">
     <img width="40%" src="https://github.com/hamedrq7/mmvae/blob/main/readme%20media/mmvae_gen_samples_0_015.png">
     <img width="40%" src="https://github.com/hamedrq7/mmvae/blob/main/readme%20media/mmvae_gen_samples_1_014.png">
@@ -204,7 +204,7 @@ The cross-generation from SVHN to MNIST is accurate. However, the SVHN to MNIST 
     <img width="40%" src="https://github.com/hamedrq7/mmvae/blob/main/readme%20media/mmvae_test_recon_0x1_018.png">
     <img width="40%" src="https://github.com/hamedrq7/mmvae/blob/main/readme%20media/mmvae_test_recon_1x0_017.png">
 </p>
-The encoder is doing a good job with SVHN, achieving 73% accuracy. However, the decoder produces unrealistic images due to the low 14% cross coherence from mnist to svhn.
+The encoder is doing a good job with SVHN, achieving 73% latent accuracy. However, the decoder produces unrealistic images due to the low 14% cross coherence from mnist to svhn.
 
 We tried two different solutions to address the issue at hand. Firstly, we decreased the latent dimension from 20 to 10, which restricted the model's ability to separate each modality. Secondly, we attempted to improve the performance of the SVHN decoder by sampling K times from the SVHN posterior in each pass. However, neither of these solutions proved to be effective.
 
